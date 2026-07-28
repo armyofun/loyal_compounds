@@ -215,6 +215,7 @@
       <h1 id="page-title">Dashboard</h1>
       <div style="display:flex;align-items:center;gap:14px">
         <span id="topbar-user" style="font-size:13px;color:var(--text-muted)"></span>
+        <button class="btn btn-outline btn-sm" id="sync-btn" onclick="syncData()" title="Reload data from server">⟳ Sync</button>
         <button class="btn btn-outline btn-sm" onclick="logout()">Sign Out</button>
         <div id="topbar-actions"></div>
       </div>
@@ -1166,6 +1167,20 @@ async function changePassword() {
   const { error } = await _sb.auth.updateUser({ password: newVal });
   if (error) alert('Error: ' + error.message);
   else { $('s-new').value = ''; $('s-confirm').value = ''; alert('Password updated.'); }
+}
+
+async function syncData() {
+  const btn = document.getElementById('sync-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⟳ Syncing…'; }
+  try {
+    await DB.load();
+    const views = { dashboard, inventory, transactions, orders };
+    if (views[currentView]) views[currentView]();
+  } catch(e) {
+    alert('Sync failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⟳ Sync'; }
+  }
 }
 
 async function logout() {
