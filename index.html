@@ -175,9 +175,16 @@
 
   /* Sync indicator */
   #sync-status { font-size:12px; font-weight:500; transition:color .3s; }
+
+  /* Offline banner */
+  #offline-banner { display:none; position:fixed; top:0; left:0; right:0; background:var(--danger); color:#fff; text-align:center; padding:8px 16px; font-size:13px; font-weight:500; z-index:10000; }
+
+  /* Quick status select in orders table */
+  .status-select { font-size:12px; padding:3px 6px; border-radius:20px; border:1px solid var(--border); cursor:pointer; background:var(--surface); }
 </style>
 </head>
 <body>
+<div id="offline-banner">⚠ No internet connection — changes may not save until you reconnect</div>
 <div id="overlay"></div>
 <div id="app">
   <!-- Sidebar -->
@@ -328,7 +335,7 @@ function stockBarColor(qty, reorder) {
   if (qty <= reorder) return '#f59e0b';
   return '#10b981';
 }
-const _STATUS_BADGE = { pending:['Pending','yellow'], confirmed:['Confirmed','blue'], shipped:['Shipped','purple'], delivered:['Delivered','green'], cancelled:['Cancelled','red'] };
+const _STATUS_BADGE = { pending:['Pending','yellow'], confirmed:['Confirmed','blue'], shipped:['Shipped','purple'], delivered:['Delivered','green'], cancelled:['Cancelled','red'], archived:['Archived','gray'] };
 function orderStatusBadge(status) { return _STATUS_BADGE[status] || [status, 'gray']; }
 function getOnOrderBySku() {
   const map = {};
@@ -337,6 +344,22 @@ function getOnOrderBySku() {
       map[item.sku] = (map[item.sku] || 0) + (item.qty || 0);
     }));
   return map;
+}
+
+// ── Offline indicator ────────────────────────────────────────────────────────
+window.addEventListener('offline', () => { const b = document.getElementById('offline-banner'); if (b) b.style.display = 'block'; });
+window.addEventListener('online',  () => { const b = document.getElementById('offline-banner'); if (b) b.style.display = 'none'; });
+
+// ── CSV export ───────────────────────────────────────────────────────────────
+function exportCSV(headers, rows, filename) {
+  const escape = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [headers.map(escape).join(','), ...rows.map(r => r.map(escape).join(','))];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function setContent(html, actions='') {
@@ -350,6 +373,9 @@ function openModal(html) {
 function closeModal() { $('modal-container').innerHTML = ''; }
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
+let _dashFrom = '', _dashTo = '';
+function dashFilter(from, to) { _dashFrom = from; _dashTo = to; dashboard(); }
+
 function dashboard() {
   const products = DB.products();
   const transactions = DB.transactions();
@@ -367,8 +393,9 @@ function dashboard() {
   const shippedSupplierCount = shippedSupplier.length;
   const shippedSupplierValue = shippedSupplier.reduce((s,o) => s + o.items.reduce((si,i) => si + i.qty * i.price, 0), 0);
 
-  // Revenue: total from delivered/shipped customer orders
-  const completedCustomer = orders.filter(o => o.type === 'customer' && ['shipped','delivered'].includes(o.status));
+  // Revenue: total from delivered/shipped customer orders (optionally date-filtered)
+  const completedCustomer = orders.filter(o => o.type === 'customer' && ['shipped','delivered'].includes(o.status)
+    && (!_dashFrom || o.date >= _dashFrom) && (!_dashTo || o.date <= _dashTo));
   const revenue = completedCustomer.reduce((s,o) => s + o.items.reduce((si,i) => si + i.qty * i.price, 0), 0);
 
   // Outstanding: pending/confirmed customer orders not yet shipped
@@ -419,6 +446,15 @@ function dashboard() {
   }).join('') || `<tr><td colspan="4"><div class="empty"><p>All items well stocked ✓</p></div></td></tr>`;
 
   setContent(`
+    <div class="toolbar" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:13px;color:var(--text-muted)">Date range:</span>
+        <input type="date" value="${_dashFrom}" onchange="dashFilter(this.value,$('dash-to').value)" id="dash-from" style="width:150px">
+        <span style="color:var(--text-muted)">→</span>
+        <input type="date" value="${_dashTo}" onchange="dashFilter($('dash-from').value,this.value)" id="dash-to" style="width:150px">
+        ${_dashFrom||_dashTo ? `<button class="btn btn-outline btn-sm" onclick="dashFilter('','')">Clear</button>` : ''}
+      </div>
+    </div>
     <div class="stat-grid">
       <div class="stat-card primary"><div class="label">Total Products</div><div class="value">${totalProducts}</div></div>
       <div class="stat-card danger"><div class="label">Out of Stock</div><div class="value">${outOfStock}</div></div>
@@ -540,6 +576,7 @@ function inventory(filter='') {
   setContent(`
     <div class="toolbar">
       <div class="search"><input type="text" id="inv-search" placeholder="Search by name, SKU, or category…" value="${esc(filter)}" oninput="inventory(this.value)"></div>
+      <button class="btn btn-outline" onclick="exportInventoryCSV()">⬇ Export CSV</button>
       <button class="btn btn-primary" onclick="addProduct()">+ Add Product</button>
     </div>
     <div class="card">
@@ -810,7 +847,8 @@ function ordSortBy(col) {
 function orders(tab='all', filter='') {
   _ordTab = tab; _ordFilter = filter;
   let ords = DB.orders();
-  if (tab !== 'all') ords = ords.filter(o => tab === 'customer' ? o.type === 'customer' : tab === 'supplier' ? o.type === 'supplier' : o.status === tab);
+  if (tab !== 'all') ords = ords.filter(o => tab === 'customer' ? o.type === 'customer' && o.status !== 'archived' : tab === 'supplier' ? o.type === 'supplier' && o.status !== 'archived' : o.status === tab);
+  if (tab === 'all') ords = ords.filter(o => o.status !== 'archived');
   if (filter) {
     const q = filter.toLowerCase();
     ords = ords.filter(o => o.ref.toLowerCase().includes(q) || o.party.toLowerCase().includes(q));
@@ -845,7 +883,11 @@ function orders(tab='all', filter='') {
       <td>${fmtDate(o.date)}</td>
       <td class="text-muted" style="font-size:13px">${itemSummary}</td>
       <td>$${fmt(total)}</td>
-      <td><span class="badge ${color}">${label}</span></td>
+      <td onclick="event.stopPropagation()">
+        <select class="status-select" onchange="quickStatusChange(${o.id},this.value)">
+          ${['pending','confirmed','shipped','delivered','cancelled','archived'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
+        </select>
+      </td>
       <td>
         <div style="display:flex;gap:6px" onclick="event.stopPropagation()">
           <button class="btn btn-outline btn-sm" onclick="editOrder(${o.id})">✏️</button>
@@ -861,9 +903,11 @@ function orders(tab='all', filter='') {
       <div class="tab ${tab==='customer'?'active':''}" onclick="orders('customer')">Customer</div>
       <div class="tab ${tab==='supplier'?'active':''}" onclick="orders('supplier')">Supplier</div>
       <div class="tab ${tab==='pending'?'active':''}" onclick="orders('pending')">Pending</div>
+      <div class="tab ${tab==='archived'?'active':''}" onclick="orders('archived')">Archived</div>
     </div>
     <div class="toolbar">
       <div class="search"><input type="text" placeholder="Search by reference or party…" value="${esc(filter)}" oninput="orders('${tab}',this.value)"></div>
+      <button class="btn btn-outline" onclick="exportOrdersCSV()">⬇ Export CSV</button>
       <button class="btn btn-primary" onclick="orderForm(null)">+ New Order</button>
     </div>
     <div class="card">
@@ -1201,8 +1245,60 @@ async function logout() {
   window.location.href = './';
 }
 
+function quickStatusChange(id, newStatus) {
+  const ords = DB.orders();
+  const o = ords.find(x => x.id === id);
+  if (!o) return;
+  const prevStatus = o.status;
+  o.status = newStatus;
+  DB.saveOrders(ords);
+
+  const wasDelivered = prevStatus === 'delivered';
+  const isDelivered  = newStatus  === 'delivered';
+  const products = DB.products();
+  let inventoryChanged = false;
+
+  if (o.type === 'customer') {
+    const wasShipped = prevStatus === 'shipped' || wasDelivered;
+    const isShipped  = newStatus  === 'shipped' || isDelivered;
+    if (!wasShipped && isShipped) {
+      o.items.forEach(item => { const p = products.find(x => x.sku === item.sku); if (p) { p.qty = Math.max(0, p.qty - item.qty); inventoryChanged = true; } });
+    } else if (wasShipped && !isShipped) {
+      o.items.forEach(item => { const p = products.find(x => x.sku === item.sku); if (p) { p.qty += item.qty; inventoryChanged = true; } });
+    }
+  }
+  if (o.type === 'supplier') {
+    if (!wasDelivered && isDelivered) {
+      o.items.forEach(item => { if (!item.sku) return; const p = products.find(x => x.sku === item.sku); if (p) { p.qty += item.qty; inventoryChanged = true; } });
+    } else if (wasDelivered && !isDelivered) {
+      o.items.forEach(item => { if (!item.sku) return; const p = products.find(x => x.sku === item.sku); if (p) { p.qty = Math.max(0, p.qty - item.qty); inventoryChanged = true; } });
+    }
+  }
+  if (inventoryChanged) DB.saveProducts(products);
+}
+
+function exportInventoryCSV() {
+  const headers = ['Name','SKU','Category','Qty','Reorder','Avg Cost','Price','F&F Price','Singles US','Kit Price','Status'];
+  const rows = DB.products().map(p => {
+    const [label] = stockStatus(p.qty, p.reorder);
+    return [p.name, p.sku, p.category, p.qty, p.reorder, p.cost, p.price, p.fff_price, p.singles_price_us, p.kit_price, label];
+  });
+  exportCSV(headers, rows, `inventory-${new Date().toISOString().split('T')[0]}.csv`);
+}
+
+function exportOrdersCSV() {
+  const headers = ['Reference','Type','Party','Date','Status','Items','Total'];
+  const rows = DB.orders().map(o => {
+    const total = o.items.reduce((s,i) => s + i.qty * i.price, 0);
+    const itemSummary = o.items.map(i => `${i.qty}x ${i.name}`).join('; ');
+    return [o.ref, o.type, o.party, o.date, o.status, itemSummary, total.toFixed(2)];
+  });
+  exportCSV(headers, rows, `orders-${new Date().toISOString().split('T')[0]}.csv`);
+}
+
 // ── Customer view ─────────────────────────────────────────────────────────────
 let _cvSort = { col: 'name', dir: 1 };
+let _cvFilter = '';
 
 function cvSortBy(col) {
   if (_cvSort.col === col) _cvSort.dir *= -1;
@@ -1211,7 +1307,11 @@ function cvSortBy(col) {
 }
 
 function renderCustomerTable() {
-  const products = DB.products();
+  let products = DB.products();
+  if (_cvFilter) {
+    const q = _cvFilter.toLowerCase();
+    products = products.filter(p => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q));
+  }
   const onOrderBySku = getOnOrderBySku();
 
   const { col, dir } = _cvSort;
@@ -1277,9 +1377,12 @@ function customerView() {
 
       </header>
       <div style="padding:24px;max-width:900px;margin:0 auto;width:100%">
-        <div style="margin-bottom:20px">
-          <h2 style="font-size:20px;font-weight:700">Available Inventory</h2>
-          <p style="color:var(--text-muted);font-size:14px;margin-top:4px">Current stock levels and pricing.</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+          <div>
+            <h2 style="font-size:20px;font-weight:700">Available Inventory</h2>
+            <p style="color:var(--text-muted);font-size:14px;margin-top:4px">Current stock levels and pricing.</p>
+          </div>
+          <input type="text" placeholder="Search products…" style="width:220px;margin:0" oninput="_cvFilter=this.value;renderCustomerTable()">
         </div>
         <div class="card">
           <div class="table-wrap"><table>
