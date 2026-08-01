@@ -262,7 +262,8 @@ const DB = {
   },
 
   _push(table, newArr, oldArr) {
-    const removed = oldArr.filter(x => !newArr.find(y => y.id === x.id)).map(x => x.id);
+    const newIds = new Set(newArr.map(x => x.id));
+    const removed = oldArr.filter(x => !newIds.has(x.id)).map(x => x.id);
     (async () => {
       try {
         if (newArr.length) await _sb.from(table).upsert(newArr, { onConflict: 'id' });
@@ -292,7 +293,7 @@ function navigate(view) {
   document.querySelectorAll('#sidebar nav a').forEach(a => {
     a.classList.toggle('active', a.dataset.view === view);
   });
-  const titles = { dashboard:'Dashboard', inventory:'Inventory', transactions:'Transactions', orders:'Orders' };
+  const titles = { dashboard:'Dashboard', inventory:'Inventory', transactions:'Transactions', orders:'Orders', settings:'Settings' };
   document.getElementById('page-title').textContent = titles[view];
   closeMobileMenu();
   views[view]();
@@ -327,10 +328,17 @@ function stockBarColor(qty, reorder) {
   if (qty <= reorder) return '#f59e0b';
   return '#10b981';
 }
-function orderStatusBadge(status) {
-  const map = { pending:['Pending','yellow'], confirmed:['Confirmed','blue'], shipped:['Shipped','purple'], delivered:['Delivered','green'], cancelled:['Cancelled','red'] };
-  return map[status] || [status, 'gray'];
+const _STATUS_BADGE = { pending:['Pending','yellow'], confirmed:['Confirmed','blue'], shipped:['Shipped','purple'], delivered:['Delivered','green'], cancelled:['Cancelled','red'] };
+function orderStatusBadge(status) { return _STATUS_BADGE[status] || [status, 'gray']; }
+function getOnOrderBySku() {
+  const map = {};
+  DB.orders().filter(o => o.type === 'supplier' && !['pending','delivered'].includes(o.status))
+    .forEach(o => (o.items||[]).forEach(item => {
+      map[item.sku] = (map[item.sku] || 0) + (item.qty || 0);
+    }));
+  return map;
 }
+
 function setContent(html, actions='') {
   $('content').innerHTML = html;
   $('topbar-actions').innerHTML = actions;
@@ -381,8 +389,9 @@ function dashboard() {
   // Top selling products by units outgoing
   const unitsSold = {};
   completedCustomer.forEach(o => o.items.forEach(i => {
-    if (i.sku) unitsSold[i.sku] = (unitsSold[i.sku] || { name: i.name, qty: 0 });
-    if (i.sku) unitsSold[i.sku].qty += i.qty;
+    if (!i.sku) return;
+    unitsSold[i.sku] = unitsSold[i.sku] || { name: i.name, qty: 0 };
+    unitsSold[i.sku].qty += i.qty;
   }));
   const topProducts = Object.entries(unitsSold).sort((a,b) => b[1].qty - a[1].qty).slice(0,5);
   const topRows = topProducts.map(([sku, d]) =>
@@ -488,12 +497,7 @@ function inventory(filter='') {
   const arrow = c => _invSort.col === c ? (_invSort.dir === 1 ? ' ▲' : ' ▼') : ' ⇅';
   const th = (label, c) => `<th style="cursor:pointer;user-select:none" onclick="invSortBy('${c}')">${label}<span style="opacity:${_invSort.col===c?1:0.3};font-size:10px">${arrow(c)}</span></th>`;
 
-  // Build on-order totals dynamically from open supplier orders
-  const openOrders = DB.orders().filter(o => o.type === 'supplier' && !['pending','delivered'].includes(o.status));
-  const onOrderBySku = {};
-  openOrders.forEach(o => (o.items||[]).forEach(item => {
-    onOrderBySku[item.sku] = (onOrderBySku[item.sku] || 0) + (item.qty || 0);
-  }));
+  const onOrderBySku = getOnOrderBySku();
 
   const rows = products.map(p => {
     const [label, color] = stockStatus(p.qty, p.reorder);
@@ -795,15 +799,16 @@ function saveTx(type, txId=null) {
 
 // ── Orders ───────────────────────────────────────────────────────────────────
 let _ordSort = { col: 'date', dir: -1 };
+let _ordTab = 'all', _ordFilter = '';
 
 function ordSortBy(col) {
   if (_ordSort.col === col) _ordSort.dir *= -1;
   else _ordSort = { col, dir: 1 };
-  orders(_ordSort._tab || 'all', _ordSort._filter || '');
+  orders(_ordTab, _ordFilter);
 }
 
 function orders(tab='all', filter='') {
-  _ordSort._tab = tab; _ordSort._filter = filter;
+  _ordTab = tab; _ordFilter = filter;
   let ords = DB.orders();
   if (tab !== 'all') ords = ords.filter(o => tab === 'customer' ? o.type === 'customer' : tab === 'supplier' ? o.type === 'supplier' : o.status === tab);
   if (filter) {
@@ -859,7 +864,7 @@ function orders(tab='all', filter='') {
     </div>
     <div class="toolbar">
       <div class="search"><input type="text" placeholder="Search by reference or party…" value="${esc(filter)}" oninput="orders('${tab}',this.value)"></div>
-      <button class="btn btn-primary" onclick="addOrder()">+ New Order</button>
+      <button class="btn btn-primary" onclick="orderForm(null)">+ New Order</button>
     </div>
     <div class="card">
       <div class="table-wrap"><table>
@@ -905,7 +910,6 @@ function viewOrder(id) {
   </div>`);
 }
 
-function addOrder() { orderForm(null); }
 function editOrder(id) { orderForm(id); }
 
 function orderForm(id) {
@@ -963,7 +967,7 @@ function orderForm(id) {
   if (!id) setTimeout(autoFillOrderRef, 0);
 }
 
-window.autoFillOrderRef = function() {
+function autoFillOrderRef() {
   const type = $('o-type')?.value;
   if (!type) return;
   const prefix = type === 'customer' ? 'C' : 'S';
@@ -974,9 +978,9 @@ window.autoFillOrderRef = function() {
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
   const ref = $('o-ref');
   if (ref) ref.value = `${prefix}-${String(next).padStart(4,'0')}`;
-};
+}
 
-window.fillItem = function(sel, i) {
+function fillItem(sel, i) {
   const opt = sel.options[sel.selectedIndex];
   if (sel.value === '__custom__') {
     $(`item-name-${i}`).value = '';
@@ -987,9 +991,9 @@ window.fillItem = function(sel, i) {
     $(`item-name-${i}`).value = opt.dataset.name;
     $(`item-price-${i}`).value = opt.dataset.price || '0';
   }
-};
+}
 
-window.addItemRow = function() {
+function addItemRow() {
   const i = window._itemCount++;
   const products = DB.products();
   const productOpts = products.map(p => `<option value="${esc(p.sku)}" data-name="${esc(p.name)}" data-price="${p.price}">${esc(p.name)} (${esc(p.sku)})</option>`).join('');
@@ -1005,12 +1009,12 @@ window.addItemRow = function() {
     <td><input id="item-price-${i}" type="number" min="0" step="0.01" value="0" style="width:90px"></td>
     <td><button class="btn btn-outline btn-sm" style="color:var(--danger)" onclick="removeItemRow(${i})">✕</button></td>`;
   $('items-body').appendChild(row);
-};
+}
 
-window.removeItemRow = function(i) {
+function removeItemRow(i) {
   const row = $(`item-row-${i}`);
   if (row) row.remove();
-};
+}
 
 function saveOrder(id) {
   const ref = $('o-ref').value.trim();
@@ -1050,48 +1054,42 @@ function saveOrder(id) {
   // Sync inventory when order status changes
   const wasDelivered = prevStatus === 'delivered';
   const isDelivered  = newStatus  === 'delivered';
+  const products = DB.products();
+  let inventoryChanged = false;
 
   if (o.type === 'customer') {
     const wasShipped = prevStatus === 'shipped' || wasDelivered;
     const isShipped  = newStatus  === 'shipped' || isDelivered;
     if (!wasShipped && isShipped) {
-      const products = DB.products();
       o.items.forEach(item => {
         const p = products.find(x => x.sku === item.sku);
-        if (p) p.qty = Math.max(0, p.qty - item.qty);
+        if (p) { p.qty = Math.max(0, p.qty - item.qty); inventoryChanged = true; }
       });
-      DB.saveProducts(products);
     } else if (wasShipped && !isShipped) {
-      const products = DB.products();
       o.items.forEach(item => {
         const p = products.find(x => x.sku === item.sku);
-        if (p) p.qty += item.qty;
+        if (p) { p.qty += item.qty; inventoryChanged = true; }
       });
-      DB.saveProducts(products);
     }
   }
 
   if (o.type === 'supplier') {
     if (!wasDelivered && isDelivered) {
-      // Add received items to inventory
-      const products = DB.products();
-      o.items.forEach(item => {
-        if (!item.sku) return; // skip shipping line items
-        const p = products.find(x => x.sku === item.sku);
-        if (p) p.qty += item.qty;
-      });
-      DB.saveProducts(products);
-    } else if (wasDelivered && !isDelivered) {
-      // Reverse if un-delivered
-      const products = DB.products();
       o.items.forEach(item => {
         if (!item.sku) return;
         const p = products.find(x => x.sku === item.sku);
-        if (p) p.qty = Math.max(0, p.qty - item.qty);
+        if (p) { p.qty += item.qty; inventoryChanged = true; }
       });
-      DB.saveProducts(products);
+    } else if (wasDelivered && !isDelivered) {
+      o.items.forEach(item => {
+        if (!item.sku) return;
+        const p = products.find(x => x.sku === item.sku);
+        if (p) { p.qty = Math.max(0, p.qty - item.qty); inventoryChanged = true; }
+      });
     }
   }
+
+  if (inventoryChanged) DB.saveProducts(products);
 
   closeModal();
   orders();
@@ -1161,7 +1159,6 @@ async function submitLogin() {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 function settings() {
-  const user = _sb.auth.getUser ? null : null;
   setContent(`
     <div style="max-width:480px;display:flex;flex-direction:column;gap:20px">
       <div class="card">
@@ -1215,11 +1212,7 @@ function cvSortBy(col) {
 
 function renderCustomerTable() {
   const products = DB.products();
-  const openOrders = DB.orders().filter(o => o.type === 'supplier' && !['pending','delivered'].includes(o.status));
-  const onOrderBySku = {};
-  openOrders.forEach(o => (o.items||[]).forEach(item => {
-    onOrderBySku[item.sku] = (onOrderBySku[item.sku] || 0) + (item.qty || 0);
-  }));
+  const onOrderBySku = getOnOrderBySku();
 
   const { col, dir } = _cvSort;
   const sorted = [...products].sort((a, b) => {
