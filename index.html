@@ -248,8 +248,10 @@ const DB = {
       _sb.from('orders').select('*').order('id'),
     ]);
     if (p.error) throw p.error;
+    if (t.error) throw t.error;
+    if (o.error) throw o.error;
     // Only seed if ALL tables are empty (genuine first run, not data corruption)
-    if (!p.data.length && !(t.data||[]).length && !(o.data||[]).length) {
+    if (!p.data.length && !t.data.length && !o.data.length) {
       await _sb.from('products').insert(_P);
       await _sb.from('transactions').insert(_T);
       await _sb.from('orders').insert(_O);
@@ -1188,7 +1190,7 @@ async function syncData() {
   if (btn) { btn.disabled = true; btn.textContent = '⟳ Syncing…'; }
   try {
     await DB.load();
-    const views = { dashboard, inventory, transactions, orders };
+    const views = { dashboard, inventory, transactions, orders, settings };
     if (views[currentView]) views[currentView]();
   } catch(e) {
     alert('Sync failed: ' + e.message);
