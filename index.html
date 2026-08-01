@@ -248,14 +248,14 @@ const DB = {
       _sb.from('orders').select('*').order('id'),
     ]);
     if (p.error) throw p.error;
-    if (!p.data.length) {
-      // First run — seed from built-in data
+    // Only seed if ALL tables are empty (genuine first run, not data corruption)
+    if (!p.data.length && !(t.data||[]).length && !(o.data||[]).length) {
       await _sb.from('products').insert(_P);
       await _sb.from('transactions').insert(_T);
       await _sb.from('orders').insert(_O);
       this._p = _P; this._t = _T; this._o = _O;
     } else {
-      this._p = p.data; this._t = t.data || []; this._o = o.data || [];
+      this._p = p.data || []; this._t = t.data || []; this._o = o.data || [];
     }
   },
 
@@ -930,14 +930,14 @@ function orderForm(id) {
   openModal(`<div class="modal" style="max-width:640px">
     <h2>${o ? 'Edit Order' : 'New Order'}</h2>
     <div class="form-grid" style="margin-bottom:16px">
-      <div class="form-group"><label>Reference *</label><input id="o-ref" value="${esc(o?.ref||'')}" placeholder="ORD-3001"></div>
       <div class="form-group"><label>Type</label>
-        <select id="o-type">
+        <select id="o-type" onchange="${o ? '' : 'autoFillOrderRef()'}">
           <option value="customer" ${o?.type==='customer'?'selected':''}>Customer Order</option>
           <option value="supplier" ${o?.type==='supplier'?'selected':''}>Supplier Order</option>
         </select>
       </div>
       <div class="form-group"><label>Party *</label><input id="o-party" value="${esc(o?.party||'')}" placeholder="Customer / Supplier name"></div>
+      <div class="form-group"><label>Reference *</label><input id="o-ref" value="${esc(o?.ref||'')}" placeholder="Auto-filled"></div>
       <div class="form-group"><label>Date</label><input id="o-date" type="date" value="${o?.date||today}"></div>
       <div class="form-group"><label>Status</label>
         <select id="o-status">
@@ -958,7 +958,21 @@ function orderForm(id) {
     </div>
   </div>`);
   window._itemCount = items.length;
+  if (!id) setTimeout(autoFillOrderRef, 0);
 }
+
+window.autoFillOrderRef = function() {
+  const type = $('o-type')?.value;
+  if (!type) return;
+  const prefix = type === 'customer' ? 'C' : 'S';
+  const re = new RegExp(`^${prefix}-(\\d+)$`);
+  const nums = DB.orders()
+    .map(o => { const m = o.ref?.match(re); return m ? parseInt(m[1]) : 0; })
+    .filter(n => n > 0);
+  const next = (nums.length ? Math.max(...nums) : 0) + 1;
+  const ref = $('o-ref');
+  if (ref) ref.value = `${prefix}-${String(next).padStart(4,'0')}`;
+};
 
 window.fillItem = function(sel, i) {
   const opt = sel.options[sel.selectedIndex];
