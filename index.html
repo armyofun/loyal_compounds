@@ -434,6 +434,14 @@ function dashboard() {
       <td class="text-muted">${esc(t.vendor||t.ref||'—')}</td>
     </tr>`).join('') || `<tr><td colspan="5"><div class="empty"><p>No transactions yet</p></div></td></tr>`;
 
+  const unpricedItems = products.filter(p => !p.cost && !p.price).sort((a,b) => a.name.localeCompare(b.name));
+  const unpricedRows = unpricedItems.map(p => `<tr>
+    <td><strong>${esc(p.name)}</strong></td>
+    <td class="text-muted">${esc(p.sku)}</td>
+    <td><span class="badge yellow">Missing</span></td>
+    <td><button class="btn btn-outline btn-sm" onclick="navigate('inventory')">Set Price</button></td>
+  </tr>`).join('') || `<tr><td colspan="4"><div class="empty"><p>All products have cost & pricing ✓</p></div></td></tr>`;
+
   const alertItems = products.filter(p => p.qty <= p.reorder).sort((a,b) => a.qty - b.qty).slice(0,5);
   const alertRows = alertItems.map(p => {
     const [label, color] = stockStatus(p.qty, p.reorder);
@@ -474,6 +482,13 @@ function dashboard() {
         <div class="table-wrap"><table>
           <thead><tr><th>Product</th><th>SKU</th><th>Units Sold</th></tr></thead>
           <tbody>${topRows}</tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <div class="section-hdr"><h2>Unpriced Products</h2></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Product</th><th>SKU</th><th>Cost / Price</th><th></th></tr></thead>
+          <tbody>${unpricedRows}</tbody>
         </table></div>
       </div>
       <div class="card">
