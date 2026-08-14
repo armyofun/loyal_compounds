@@ -1489,7 +1489,7 @@ function cvSortBy(col) {
 }
 
 function renderCustomerTable() {
-  let products = DB.products();
+  let products = DB.products().filter(p => p.category !== 'Oils');
   if (_cvFilter) {
     const q = _cvFilter.toLowerCase();
     products = products.filter(p => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q));
