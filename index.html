@@ -1314,6 +1314,173 @@ function exportOrdersCSV() {
 // ── Customer view ─────────────────────────────────────────────────────────────
 let _cvSort = { col: 'name', dir: 1 };
 let _cvFilter = '';
+let _cvCart = [];
+
+function cvShowOrder() {
+  const existing = document.getElementById('cv-order-modal');
+  if (existing) { existing.remove(); return; }
+  _cvCart = [];
+  const peptides = DB.products().filter(p => p.category === 'Peptides' && p.qty > 0);
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="cv-order-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto">
+      <div style="background:var(--bg);border-radius:12px;width:100%;max-width:560px;padding:24px;margin:auto">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+          <h2 style="font-size:18px;font-weight:700">Place an Order</h2>
+          <button onclick="document.getElementById('cv-order-modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-muted);line-height:1">✕</button>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">Add Products</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <select id="cv-ord-sku" style="flex:1;min-width:200px">
+              <option value="">Select a product…</option>
+              ${peptides.map(p => `<option value="${esc(p.sku)}" data-name="${esc(p.name)}" data-price="${p.price}" data-max="${p.qty}">${esc(p.name)}${p.price > 0 ? ' — $'+fmt(p.price) : ''}</option>`).join('')}
+            </select>
+            <input id="cv-ord-qty" type="number" min="1" value="1" style="width:64px">
+            <button class="btn btn-primary" onclick="cvAddCartItem()">Add</button>
+          </div>
+        </div>
+        <div id="cv-cart-section"></div>
+        <div style="margin-top:20px">
+          <label style="font-weight:600;font-size:14px;display:block;margin-bottom:8px">Shipping Information</label>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <input id="cv-ship-name" type="text" placeholder="Full name" style="width:100%;box-sizing:border-box">
+            <input id="cv-ship-addr" type="text" placeholder="Street address" style="width:100%;box-sizing:border-box">
+            <div style="display:flex;gap:8px">
+              <input id="cv-ship-city" type="text" placeholder="City" style="flex:1;min-width:0">
+              <input id="cv-ship-state" type="text" placeholder="State" style="width:72px">
+              <input id="cv-ship-zip" type="text" placeholder="ZIP" style="width:88px">
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:16px;background:#eff6ff;border-radius:8px;padding:14px;display:flex;align-items:center;gap:12px">
+          <span style="font-size:26px">💙</span>
+          <div>
+            <div style="font-size:12px;color:#64748b">Payment via Venmo</div>
+            <div style="font-weight:700;font-size:17px;color:#1e40af">@jf7482</div>
+          </div>
+        </div>
+        <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary" style="flex:1;min-width:160px" onclick="cvSendOrder('whatsapp')">📲 Send via WhatsApp</button>
+          <button class="btn btn-outline" style="flex:1;min-width:160px" onclick="cvSendOrder('sms')">💬 Send via Messages</button>
+        </div>
+      </div>
+    </div>
+  `);
+  cvRenderCart();
+}
+
+function cvAddCartItem() {
+  const sel = document.getElementById('cv-ord-sku');
+  const qtyEl = document.getElementById('cv-ord-qty');
+  if (!sel || !sel.value) return;
+  const opt = sel.options[sel.selectedIndex];
+  const sku = sel.value;
+  const name = opt.dataset.name;
+  const price = parseFloat(opt.dataset.price) || 0;
+  const max = parseInt(opt.dataset.max) || 999;
+  let qty = parseInt(qtyEl.value) || 1;
+  if (qty < 1) qty = 1;
+  if (qty > max) qty = max;
+  const existing = _cvCart.find(i => i.sku === sku);
+  if (existing) {
+    existing.qty = Math.min(existing.qty + qty, max);
+  } else {
+    _cvCart.push({ sku, name, qty, price });
+  }
+  qtyEl.value = 1;
+  cvRenderCart();
+}
+
+function cvRemoveCartItem(sku) {
+  _cvCart = _cvCart.filter(i => i.sku !== sku);
+  cvRenderCart();
+}
+
+function cvRenderCart() {
+  const el = document.getElementById('cv-cart-section');
+  if (!el) return;
+  if (!_cvCart.length) {
+    el.innerHTML = `<div style="color:var(--text-muted);font-size:14px;padding:4px 0 8px">No items added yet.</div>`;
+    return;
+  }
+  const total = _cvCart.reduce((s, i) => s + i.qty * i.price, 0);
+  el.innerHTML = `
+    <div style="border:1px solid var(--border,#e2e8f0);border-radius:8px;overflow:hidden;margin-bottom:4px">
+      ${_cvCart.map(i => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border,#e2e8f0)">
+          <div>
+            <div style="font-weight:600;font-size:14px">${esc(i.name)}</div>
+            <div style="font-size:12px;color:var(--text-muted)">Qty: ${i.qty}${i.price > 0 ? ' &middot; $'+fmt(i.price)+' each' : ''}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            ${i.price > 0 ? `<strong>$${fmt(i.qty * i.price)}</strong>` : ''}
+            <button onclick="cvRemoveCartItem('${esc(i.sku)}')" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;line-height:1;padding:0">✕</button>
+          </div>
+        </div>
+      `).join('')}
+      ${total > 0 ? `
+        <div style="padding:8px 14px;display:flex;justify-content:space-between;font-size:13px;color:var(--text-muted)"><span>Subtotal</span><span>$${fmt(total)}</span></div>
+        <div style="padding:8px 14px;display:flex;justify-content:space-between;font-size:13px;color:var(--text-muted)"><span>Shipping</span><span>$10.00</span></div>
+        <div style="padding:10px 14px;display:flex;justify-content:space-between;font-weight:700;font-size:15px;border-top:1px solid var(--border,#e2e8f0)"><span>Total</span><span>$${fmt(total + 10)}</span></div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function cvSendOrder(channel) {
+  if (!_cvCart.length) { alert('Please add at least one item to your order.'); return; }
+  const name  = document.getElementById('cv-ship-name')?.value.trim() || '';
+  const addr  = document.getElementById('cv-ship-addr')?.value.trim() || '';
+  const city  = document.getElementById('cv-ship-city')?.value.trim() || '';
+  const state = document.getElementById('cv-ship-state')?.value.trim() || '';
+  const zip   = document.getElementById('cv-ship-zip')?.value.trim() || '';
+  if (!name || !addr || !city || !state || !zip) {
+    alert('Please fill in all shipping information before sending.');
+    return;
+  }
+  const subtotal = _cvCart.reduce((s, i) => s + i.qty * i.price, 0);
+  const shipping = 10;
+  const total = subtotal + shipping;
+  const lines = _cvCart.map(i => `• ${i.name} x${i.qty}${i.price > 0 ? ' — $'+fmt(i.qty*i.price) : ''}`).join('\n');
+  const msg = [
+    "Hi! I'd like to place an order with Loyal Compounds.",
+    '',
+    'ORDER:',
+    lines,
+    ...(subtotal > 0 ? ['', `Subtotal: $${fmt(subtotal)}`, `Shipping: $${fmt(shipping)}`, `Total: $${fmt(total)}`] : []),
+    '',
+    'SHIP TO:',
+    name,
+    addr,
+    `${city}, ${state} ${zip}`,
+    '',
+    'Payment sent via Venmo to @jf7482',
+  ].join('\n');
+  // Save order to DB
+  const ords = DB.orders();
+  const nums = ords.map(o => { const m = o.ref?.match(/^C-(\d+)$/); return m ? parseInt(m[1]) : 0; }).filter(n => n > 0);
+  const nextNum = (nums.length ? Math.max(...nums) : 0) + 1;
+  const ref = `C-${String(nextNum).padStart(4, '0')}`;
+  const newOrder = {
+    id: DB.nextId(ords),
+    ref,
+    party: name,
+    type: 'customer',
+    date: new Date().toISOString().slice(0, 10),
+    status: 'confirmed',
+    notes: `${addr}, ${city}, ${state} ${zip}`,
+    items: _cvCart.map(i => ({ name: i.name, sku: i.sku, qty: i.qty, price: i.price })),
+  };
+  ords.push(newOrder);
+  DB.saveOrders(ords);
+
+  const encoded = encodeURIComponent(msg);
+  if (channel === 'whatsapp') {
+    window.open(`https://wa.me/13143233579?text=${encoded}`, '_blank');
+  } else {
+    window.location.href = `sms:+13143233579?body=${encoded}`;
+  }
+}
 
 function cvSortBy(col) {
   if (_cvSort.col === col) _cvSort.dir *= -1;
@@ -1336,8 +1503,7 @@ function renderCustomerTable() {
     else if (col === 'sku') { av = a.sku.toLowerCase(); bv = b.sku.toLowerCase(); }
     else if (col === 'qty') { av = a.qty; bv = b.qty; }
     else if (col === 'status') { av = stockStatus(a.qty, a.reorder)[0]; bv = stockStatus(b.qty, b.reorder)[0]; }
-    else if (col === 'singles') { av = a.singles_price_us || 0; bv = b.singles_price_us || 0; }
-    else if (col === 'kit') { av = a.kit_price || 0; bv = b.kit_price || 0; }
+    else if (col === 'price') { av = a.price || 0; bv = b.price || 0; }
     else { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
     if (av < bv) return -dir;
     if (av > bv) return dir;
@@ -1360,15 +1526,14 @@ function renderCustomerTable() {
         </div>
       </td>
       <td><span class="badge ${color}">${label}</span></td>
-      <td>${p.singles_price_us > 0 ? '<strong>$'+fmt(p.singles_price_us)+'</strong>' : '<span class="text-muted">—</span>'}</td>
-      <td>${p.kit_price > 0 ? '<strong>$'+fmt(p.kit_price)+'</strong>' : '<span class="text-muted">—</span>'}</td>
+      <td>${p.price > 0 ? '<strong>$'+fmt(p.price)+'</strong>' : '<span class="text-muted">—</span>'}</td>
     </tr>`;
   }).join('');
 
   const tbody = document.getElementById('cv-tbody');
   const thead = document.getElementById('cv-thead');
   if (tbody) tbody.innerHTML = rows;
-  if (thead) thead.innerHTML = `<tr>${th('Name','name')}${th('SKU','sku')}${th('Qty / On Order','qty')}${th('Status','status')}${th('Singles (US)','singles')}${th('Kit Price (CO)','kit')}</tr>`;
+  if (thead) thead.innerHTML = `<tr>${th('Name','name')}${th('SKU','sku')}${th('Qty / On Order','qty')}${th('Status','status')}${th('Price','price')}</tr>`;
 }
 
 function customerView() {
@@ -1397,7 +1562,10 @@ function customerView() {
             <h2 style="font-size:20px;font-weight:700">Available Inventory</h2>
             <p style="color:var(--text-muted);font-size:14px;margin-top:4px">Current stock levels and pricing.</p>
           </div>
-          <input type="text" placeholder="Search products…" style="width:220px;margin:0" oninput="_cvFilter=this.value;renderCustomerTable()">
+          <div style="display:flex;gap:10px;align-items:center">
+            <input type="text" placeholder="Search products…" style="width:220px;margin:0" oninput="_cvFilter=this.value;renderCustomerTable()">
+            <button class="btn btn-primary" onclick="cvShowOrder()">Place an Order</button>
+          </div>
         </div>
         <div class="card">
           <div class="table-wrap"><table>
