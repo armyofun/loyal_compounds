@@ -268,15 +268,30 @@ const DB = {
     }
   },
 
+  // Writes run one at a time; _writes lets Sync wait for them, _failed tracks tables that didn't save.
+  _writes: Promise.resolve(), _failed: new Set(),
+
   _push(table, newArr, oldArr) {
     const newIds = new Set(newArr.map(x => x.id));
     const removed = oldArr.filter(x => !newIds.has(x.id)).map(x => x.id);
-    (async () => {
+    this._writes = this._writes.then(async () => {
       try {
-        if (newArr.length) await _sb.from(table).upsert(newArr, { onConflict: 'id' });
-        if (removed.length) await _sb.from(table).delete().in('id', removed);
-      } catch(e) { console.error(`Supabase ${table} error:`, e); }
-    })();
+        // supabase-js resolves with { error } instead of throwing, so check it explicitly
+        if (newArr.length) {
+          const { error } = await _sb.from(table).upsert(newArr, { onConflict: 'id' });
+          if (error) throw error;
+        }
+        if (removed.length) {
+          const { error } = await _sb.from(table).delete().in('id', removed);
+          if (error) throw error;
+        }
+        this._failed.delete(table);
+      } catch(e) {
+        console.error(`Supabase ${table} error:`, e);
+        this._failed.add(table);
+        alert(`Could not save ${table} to the database. Your changes are NOT saved and will be lost on Sync.\n\n${e.message || e}`);
+      }
+    });
   },
 
   saveProducts(v)     { this._push('products',     v, this._p); this._p = v; },
@@ -1245,7 +1260,10 @@ async function syncData() {
   const btn = document.getElementById('sync-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⟳ Syncing…'; }
   try {
+    await DB._writes;
+    if (DB._failed.size && !confirm(`Unsaved changes to ${[...DB._failed].join(', ')} failed to reach the database and will be lost if you sync. Sync anyway?`)) return;
     await DB.load();
+    DB._failed.clear();
     const views = { dashboard, inventory, transactions, orders, settings };
     if (views[currentView]) views[currentView]();
   } catch(e) {
