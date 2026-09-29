@@ -278,7 +278,8 @@ const DB = {
       try {
         // supabase-js resolves with { error } instead of throwing, so check it explicitly
         if (newArr.length) {
-          const { error } = await _sb.from(table).upsert(newArr, { onConflict: 'id' });
+          // defaultToNull:false lets new rows fall back to column defaults for fields the app doesn't send
+          const { error } = await _sb.from(table).upsert(newArr, { onConflict: 'id', defaultToNull: false });
           if (error) throw error;
         }
         if (removed.length) {
@@ -680,6 +681,7 @@ function saveProduct(id) {
   const qramon = Math.max(0, parseInt($('f-qramon').value) || 0);
   const existingP = id ? DB.products().find(x => x.id === id) : null;
   const p = {
+    ...existingP, // keep database-only columns (e.g. published) the form doesn't edit
     id: id || DB.nextId(products),
     name, sku,
     category: $('f-cat').value.trim() || 'Peptides',
